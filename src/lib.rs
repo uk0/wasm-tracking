@@ -1,5 +1,5 @@
 use wasm_bindgen::prelude::*;
-use web_sys::{console, MutationObserver, MutationObserverInit, Element, EventTarget, Document, Window, Event, Location};
+use web_sys::{console, MutationObserver, MutationObserverInit, Element, EventTarget, Document, Window, Event, Location, Node};
 use wasm_bindgen::JsCast;
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -55,6 +55,59 @@ fn get_css_selector(element: &Element) -> String {
     path.join(" > ")
 }
 
+
+fn get_absolute_xpath(element: &Element) -> String {
+    let mut path_parts = Vec::new();
+    let mut current_node = Some(element.clone().dyn_into::<Node>().unwrap());
+
+    while let Some(node) = current_node {
+        if let Some(element) = node.dyn_ref::<Element>() {
+            let tag_name = element.tag_name().to_lowercase();
+            let mut index = 1;
+            let mut sibling = element.previous_element_sibling();
+
+            while let Some(s) = sibling {
+                if s.tag_name().to_lowercase() == tag_name {
+                    index += 1;
+                }
+                sibling = s.previous_element_sibling();
+            }
+
+            path_parts.push(format!("{}[{}]", tag_name, index));
+        }
+        current_node = node.parent_node();
+    }
+
+    path_parts.reverse();
+    format!("/{}", path_parts.join("/"))
+}
+
+fn get_relative_xpath(element: &Element) -> String {
+    let tag_name = element.tag_name().to_lowercase();
+
+    // Try to find a unique id
+    if let Some(id) = element.get_attribute("id") {
+        return format!("//{tag_name}[@id='{id}']");
+    }
+
+    // Try to find a unique name
+    if let Some(name) = element.get_attribute("name") {
+        return format!("//{tag_name}[@name='{name}']");
+    }
+
+    // If no unique identifier, use position
+    let mut index = 1;
+    let mut sibling = element.previous_element_sibling();
+
+    while let Some(s) = sibling {
+        if s.tag_name().to_lowercase() == tag_name {
+            index += 1;
+        }
+        sibling = s.previous_element_sibling();
+    }
+
+    format!("//{tag_name}[{index}]")
+}
 fn get_xpath(element: &Element) -> String {
     let mut path = Vec::new();
     let mut current = Some(element.clone());
@@ -94,7 +147,9 @@ fn create_target_data(element: &Element) -> Value {
         "tagName": element.tag_name().to_lowercase(),
         "id": element.id(),
         "className": element.class_name(),
-        "xpath": get_xpath(element),
+        // "xpath": get_xpath(element),
+        "absoluteXPath": get_absolute_xpath(element),
+        "relativeXPath": get_relative_xpath(element),
         "cssSelector": get_css_selector(element),
         "textContent": element.text_content().unwrap_or_default().trim(),
         "htmlContent": element.outer_html(),
