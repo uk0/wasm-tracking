@@ -1,11 +1,12 @@
 use wasm_bindgen::prelude::*;
-use web_sys::{console, MutationObserver, MutationObserverInit, Element, EventTarget, Document, Window, Event, Location, Node};
+use web_sys::{console, MutationObserver, MutationObserverInit, Element, EventTarget, Document, Window, Event, Location, Node, Selection};
 use wasm_bindgen::JsCast;
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 use reqwest::Client;
 use uuid::Uuid;
+
 // 添加全局 debug 常量
 static DEBUG: bool = false;
 static DELETE_SCRIPTS: bool = true;  // 判断是否去除html内的script标签
@@ -108,6 +109,7 @@ fn get_relative_xpath(element: &Element) -> String {
 
     format!("//{tag_name}[{index}]")
 }
+
 fn get_xpath(element: &Element) -> String {
     let mut path = Vec::new();
     let mut current = Some(element.clone());
@@ -142,17 +144,29 @@ fn get_xpath(element: &Element) -> String {
     format!("//{}", path.join("/"))
 }
 
+fn create_initial_data(window: &Window, document: &Document) -> Value {
+    json!({
+        "page_url": window.location().href().unwrap_or_default(),
+        "type": "page_load",
+        "id": Uuid::new_v4().to_string(),
+        "timestamp": js_sys::Date::now() as i64,
+        "target":{
+            "html_content": document.body().unwrap().outer_html(),
+        }
+    })
+}
+
 fn create_target_data(element: &Element) -> Value {
     json!({
-        "tagName": element.tag_name().to_lowercase(),
+        "tag_name": element.tag_name().to_lowercase(),
         "id": element.id(),
-        "className": element.class_name(),
+        "class_name": element.class_name(),
         // "xpath": get_xpath(element),
-        "absoluteXPath": get_absolute_xpath(element),
-        "relativeXPath": get_relative_xpath(element),
-        "cssSelector": get_css_selector(element),
-        "textContent": element.text_content().unwrap_or_default().trim(),
-        "htmlContent": element.outer_html(),
+        "absolute_xpath": get_absolute_xpath(element),
+        "relative_xpath": get_relative_xpath(element),
+        "css_selector": get_css_selector(element),
+        "text_content": element.text_content().unwrap_or_default().trim(),
+        "html_content": element.outer_html(),
     })
 }
 
@@ -178,7 +192,8 @@ fn get_mouse_position(event: &Event) -> Option<(i32, i32)> {
         None
     }
 }
-async fn send_event_data(data: Value,location: Location) {
+
+async fn send_event_data(data: Value, location: Location) {
     let client = Client::new();
     let protocol = location.protocol().unwrap_or_else(|_| "http".to_string());
     let host = location.host().unwrap_or_else(|_| "localhost".to_string());
@@ -196,7 +211,7 @@ async fn send_event_data(data: Value,location: Location) {
             } else {
                 console::log_1(&JsValue::from_str(&format!("Failed to send event data: {:?}", response.status())));
             }
-        },
+        }
         Err(e) => {
             console::log_1(&JsValue::from_str(&format!("Error sending event data: {:?}", e)));
         }
@@ -211,14 +226,12 @@ impl WasmObserver {
         let window: Window = web_sys::window().expect("no global `window` exists");
         let document = window.document().expect("should have a document on window");
         let recent_changes = Rc::new(RefCell::new(Vec::new()));
-        let recent_changes_clone = Rc::clone(&recent_changes);
 
         let mutation_callback = Closure::wrap(Box::new(move |mutations: Vec<web_sys::MutationRecord>, _observer: web_sys::MutationObserver| {
             for mutation in mutations.iter() {
                 let target = mutation.target().unwrap();
                 if let Some(element) = target.dyn_ref::<Element>() {
                     let change = create_change_data("mutation", element, &window, &document, None);
-                    recent_changes_clone.borrow_mut().push(change.clone());
                     // console::log_1(&JsValue::from_str(&format!("DOM Change: {}", serde_json::to_string_pretty(&change).unwrap())));
                 }
             }
@@ -239,7 +252,22 @@ impl WasmObserver {
 
         observer.setup_event_listeners()?;
 
+        observer.send_initial_data();
         Ok(observer)
+    }
+
+    fn send_initial_data(&self) {
+        let window = web_sys::window().expect("no global `window` exists");
+        let document = window.document().expect("should have a document on window");
+
+        let initial_data = create_initial_data(&window, &document);
+        let location = window.location();
+
+        // 这里你可以添加发送数据的逻辑，例如通过 WebSocket 或 HTTP 请求
+        // console::log_1(&format!("Initial data: {:?}", serde_json::to_string_pretty(&initial_data).unwrap()).into());
+
+        // 发送数据到 API
+        wasm_bindgen_futures::spawn_local(send_event_data(initial_data, location.clone()));
     }
 
     // 新添加的方法，用于删除 body 内的 script 标签
@@ -264,13 +292,11 @@ impl WasmObserver {
     fn setup_event_listeners(&self) -> Result<(), JsValue> {
         let window = web_sys::window().expect("no global `window` exists");
         let document = window.document().expect("should have a document on window");
-        let recent_changes = Rc::clone(&self.recent_changes);
         let location = window.location();
 
         let event_types = vec!["click", "input", "scroll", "mousemove", "keypress"];
 
         for event_type in event_types {
-            let recent_changes_clone = Rc::clone(&recent_changes);
             let window_clone = window.clone();
             let document_clone = document.clone();
             let event_type_clone = event_type.to_string();
@@ -282,15 +308,26 @@ impl WasmObserver {
                     if let Some(element) = target.dyn_ref::<Element>() {
                         // 检查是否为 mousemove 事件且 DEBUG 为 false
                         if event_type_clone == "mousemove" && !DEBUG {
+                            //鼠标移动事件太多
                             return;
                         }
                         let mouse_pos = get_mouse_position(&event);
-                        let change = create_change_data(&event_type_clone, element, &window_clone, &document_clone, mouse_pos);
-                        recent_changes_clone.borrow_mut().push(change.clone());
-                        // console::log_1(&JsValue::from_str(&format!("Event: {}", serde_json::to_string_pretty(&change).unwrap())));
 
+                        if let Some(selection) = document_clone.get_selection().ok().flatten() {
+                            let selected_text: String = selection.to_string().into();
+                            if !selected_text.is_empty() && event_type_clone != "mousemove" {
+                                let change_data = create_text_selection_data("select_text", &selection, &window_clone, &document_clone);
+                                wasm_bindgen_futures::spawn_local(send_event_data(change_data, location_clone.clone()));
+                                // 不继续执行点击的监控
+                                return;
+                            }
+                        }
+                        // 点击等其他事件
+                        let change = create_change_data(&event_type_clone, element, &window_clone, &document_clone, mouse_pos);
+                        // console::log_1(&JsValue::from_str(&format!("Event: {}", serde_json::to_string_pretty(&change).unwrap())));
                         // 发送数据到 API
-                        wasm_bindgen_futures::spawn_local(send_event_data(change, location_clone.clone()));                    }
+                        wasm_bindgen_futures::spawn_local(send_event_data(change, location_clone.clone()));
+                    }
                 }
             }) as Box<dyn FnMut(Event)>);
 
@@ -328,22 +365,59 @@ impl WasmObserver {
     }
 }
 
+fn create_text_selection_data(event_type: &str, selection: &Selection, window: &Window, document: &Document) -> Value {
+    let range = selection.get_range_at(0).expect("Failed to get range");
+    let start_container = range.start_container().expect("Failed to get start container");
+    let end_container = range.end_container().expect("Failed to get end container");
+
+    let start_element = start_container
+        .parent_element()
+        .or_else(|| document.body().and_then(|body| body.dyn_into::<Element>().ok()))
+        .expect("Failed to get start element");
+    let end_element = end_container
+        .parent_element()
+        .or_else(|| document.body().and_then(|body| body.dyn_into::<Element>().ok()))
+        .expect("Failed to get end element");
+
+    let selected_text: String = selection.to_string().into();
+
+    json!({
+        "id": Uuid::new_v4().to_string(),
+        "type": event_type,
+        "timestamp": js_sys::Date::now() as u64,
+        "page_url": window.location().href().unwrap_or_default(),
+        "target": create_target_data(&end_element),
+        // 扩展数据
+         "conditional_field":{
+            "selected_text": selected_text,
+            // "start_element": create_target_data(&start_element),
+            // "end_element": create_target_data(&end_element),
+            "start_offset": range.start_offset().unwrap_or(0),
+            "end_offset": range.end_offset().unwrap_or(0),
+        }
+    })
+}
+
+
 fn create_change_data(event_type: &str, element: &Element, window: &Window, document: &Document, mouse_pos: Option<(i32, i32)>) -> Value {
-   let mut change =  json!({
+    let mut change = json!({
         // "body": document.body().unwrap().outer_html(),
         "id": Uuid::new_v4().to_string(),
-        "timestamp": js_sys::Date::now() as i64,
         "type": event_type,
+        "timestamp": js_sys::Date::now() as i64,
+        "page_url": window.location().href().unwrap_or_default(),
         "target": create_target_data(element),
-        "position": {
+        // 扩展数据
+        "conditional_field":{
+            "position": {
             "x": mouse_pos.map(|(x, _)| x).unwrap_or_else(|| window.scroll_x().unwrap_or(0.0) as i32),
             "y": mouse_pos.map(|(_, y)| y).unwrap_or_else(|| window.scroll_y().unwrap_or(0.0) as i32),
         },
-        "viewportSize": {
+        "viewport_size": {
             "width": window.inner_width().unwrap().as_f64().unwrap() as i32,
             "height": window.inner_height().unwrap().as_f64().unwrap() as i32,
-        },
-        "pageUrl": window.location().href().unwrap_or_default(),
+        }
+       },
     });
 
     // 只有在 DELETE_BODY 为 false 时才添加 body 字段

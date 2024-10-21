@@ -16,7 +16,7 @@ wasm-bindgen-futures = "0.4"
 getrandom = { version = "0.2", features = ["js"] }
 wasm-bindgen = { version = "0.2.63", features = ["serde-serialize"] }
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Url", "Event","EventTarget", "Document", "Element", "HtmlElement","console", "Performance", "PerformanceObserverInit", "PerformanceEntry", "PerformanceObserver", "MutationObserver", "MutationObserverInit", "Node", "Element", "NodeList", "Document", "HtmlCollection", "MutationRecord", "Window", "Location", "HtmlElement"] }
+web-sys = { version = "0.3", features = ["Url", "Event", "EventTarget", "Document", "Element", "HtmlElement", "console", "Performance", "PerformanceObserverInit", "PerformanceEntry", "PerformanceObserver", "MutationObserver", "MutationObserverInit", "Node", "NodeList", "HtmlCollection", "MutationRecord", "Window", "Location", "Selection", "Range"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
